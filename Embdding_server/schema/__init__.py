@@ -1,0 +1,1 @@
+# Ở đây khai báo các schema dùng cho embedding service, bao gồm các Pydantic models để định nghĩa cấu trúc dữ liệu cho requests và responses.
