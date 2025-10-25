@@ -1,0 +1,1 @@
+# Ở đây khai báo API endpoints (sử dụng FastAPI) để tương tác với hệ thống agents, bao gồm việc nhận yêu cầu từ người dùng, chuyển tiếp yêu cầu đến các agents phù hợp, và trả về kết quả cho người dùng.

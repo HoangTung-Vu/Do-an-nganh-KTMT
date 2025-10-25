@@ -1,0 +1,1 @@
+# Ở đây viết các hàm tiện ích dùng chung cho toàn bộ hệ thống, bao gồm các hàm xử lý dữ liệu, định dạng đầu vào/đầu ra, và các chức năng hỗ trợ khác.

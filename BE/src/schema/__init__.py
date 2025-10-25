@@ -1,0 +1,1 @@
+# Ở đây khai báo model schema dùng chung trong hệ thống, bao gồm các Pydantic models để định nghĩa cấu trúc dữ liệu cho requests và responses giữa các thành phần khác nhau của hệ thống.

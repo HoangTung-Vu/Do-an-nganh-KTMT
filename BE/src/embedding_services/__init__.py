@@ -1,0 +1,1 @@
+# Ở đây viết các logic để gọi đến server để lấy embedding vector
