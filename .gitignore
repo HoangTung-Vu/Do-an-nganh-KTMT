@@ -1,0 +1,64 @@
+# Python virtual environments (any depth)
+.venv/
+venv/
+env/
+ENV/
+**/.venv/
+**/venv/
+**/env/
+**/ENV/
+
+uv.lock
+**/uv.lock
+
+
+# Environment files / secrets (any depth)
+.env
+**/.env
+*.env
+**/*.env
+
+# Byte-compiled / cache (any depth)
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+
+# Build / packaging
+build/
+dist/
+**/build/
+**/dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Coverage / test reports
+.coverage
+coverage.xml
+htmlcov/
+**/.coverage
+**/coverage.xml
+**/htmlcov/
+
+# Logs
+*.log
+**/*.log
+
+# IDEs / editors
+.vscode/
+.idea/
+**/.vscode/
+**/.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+**/.DS_Store
+**/Thumbs.db

@@ -1,13 +1,10 @@
 [project]
-name = "be"
+name = "embdding-server"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "google-adk>=1.17.0",
-    "google-genai>=1.46.0",
-    "httpx>=0.28.1",
-    "openai>=2.6.1",
-    "requests>=2.32.5",
+    "sentence-transformers>=5.1.2",
+    "transformers>=4.57.1",
 ]
