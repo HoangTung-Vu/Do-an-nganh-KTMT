@@ -1,7 +1,7 @@
 # Quy trình quản lý mã nguồn (Branching & Workflow)
 
 Mục tiêu: đảm bảo phát triển song song an toàn, dễ code review, có CI/CD, và release ổn định.
-
+              
 ## Tổng quan branchmark
 - `main`  
   - Luôn ở trạng thái deploy được lên production. Chỉ merge PR đã qua review và CI passing. Mỗi commit trên `main` là một release (gắn tag).
