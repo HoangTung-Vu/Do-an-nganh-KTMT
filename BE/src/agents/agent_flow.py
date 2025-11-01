@@ -1,1 +1,0 @@
-# Ở đây khai báo agent flow, đôi khi agent_flow chỉ là 1 single-agent được tạo từ factory trong agent/
