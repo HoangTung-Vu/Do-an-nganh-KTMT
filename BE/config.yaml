@@ -1,0 +1,42 @@
+# Backend Configuration
+
+# PDF Processing
+pdf_processing:
+  scale: 2.0  # PDF rendering scale (higher = better quality)
+  conf_threshold: 0.25  # YOLO confidence threshold
+  iou_threshold: 0.50   # YOLO IoU threshold
+  model_path: "./models/yolo-doclaynet.pt"  # Path to YOLO model weights
+
+# Embedding Service (vLLM with OpenAI-compatible API)
+embedding:
+  base_url: "http://localhost:8000/v1"  # vLLM server URL
+  api_key: "EMPTY"  # API key (can be dummy for local vLLM)
+  model: "BAAI/bge-m3"  # Embedding model name
+  max_retries: 3
+  timeout: 60
+  batch_size: 32  # Batch size for embedding generation
+
+# Vector Database (Qdrant)
+vector_store:
+  url: "http://localhost:6333"  # Qdrant server URL
+  api_key: null  # Optional API key for authentication
+  distance_metric: "cosine"  # Distance metric: cosine, euclid, or dot
+
+# Document Indexing
+indexing:
+  data_dir: "./data"  # Root directory for processed documents
+  chunk_size: 512  # Maximum words per chunk
+  chunk_overlap: 50  # Overlapping words between chunks
+  auto_index_on_upload: true  # Automatically index after PDF upload
+
+# API Server
+server:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true  # Hot reload for development
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
