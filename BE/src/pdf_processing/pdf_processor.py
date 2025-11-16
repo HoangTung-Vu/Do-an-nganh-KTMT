@@ -13,6 +13,7 @@ import pypdfium2 as pdfium
 from ultralytics import YOLO
 from ..utils.logger import setup_logger
 from ..utils.load_config import load_config
+from ..utils.s3_client import S3Client
 
 logger = setup_logger('pdf_processor', 'pdf_processing.log')
 
@@ -70,16 +71,20 @@ class PDFProcessor:
         self.pdf_path = Path(pdf_path)
         self.book_name = self.pdf_path.stem
         
-        # Setup directory structure
-        base_output = output_dir or indexing_config.get('data_dir', './data')
-        self.output_dir = Path(base_output) / self.book_name
-        self.images_dir = self.output_dir / "images"
-        self.pages_dir = self.output_dir / "pdf_pages"
-        self.pred_dir = self.output_dir / "predictions"
+        # Setup temporary local directory for processing
+        temp_base = pdf_config.get('temp_dir', './temp')
+        self.temp_dir = Path(temp_base) / self.book_name
+        self.images_dir = self.temp_dir / "images"
+        self.pages_dir = self.temp_dir / "pdf_pages"
+        self.pred_dir = self.temp_dir / "predictions"
         
-        # Create directories
-        for directory in [self.output_dir, self.images_dir, self.pages_dir, self.pred_dir]:
+        # Create temporary directories
+        for directory in [self.temp_dir, self.images_dir, self.pages_dir, self.pred_dir]:
             directory.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize S3 client
+        self.s3_client = S3Client(config=config)
+        self.s3_prefix = self.book_name  # S3 folder prefix for this book
         
         # Model parameters from config
         self.model_path = model_path or pdf_config.get('model_path', './models/yolo-doclaynet.pt')
@@ -124,11 +129,15 @@ class PDFProcessor:
         chapters = self._split_chapters(linear_text)
         
         # Step 5: Save results
-        logger.info("[Step 5/5] Saving results...")
+        logger.info("[Step 5/5] Saving results to S3...")
         result = self._save_results(chapters)
         
+        # Step 6: Cleanup temporary files
+        logger.info("[Step 6/6] Cleaning up temporary files...")
+        self._cleanup_temp_files()
+        
         logger.info(f"Processing complete! Chapters: {len(chapters)}, Images: {self.image_counter}")
-        logger.info(f"Output saved to: {self.output_dir}")
+        logger.info(f"Results saved to S3: s3://{self.s3_client.bucket_name}/{self.s3_prefix}/")
         
         return result
     
@@ -398,14 +407,15 @@ class PDFProcessor:
             return -1
         
         image_id = self.image_counter
-        cls_name = det["cls_name"].lower()
-        img_filename = f"{page_stem}_{cls_name}_{image_id:04d}.png"
-        img_path = self.images_dir / img_filename
         
-        cv2.imwrite(str(img_path), crop)
+        # Save locally first
+        img_filename = f"{image_id}.png"
+        local_img_path = self.images_dir / img_filename
+        cv2.imwrite(str(local_img_path), crop)
+        
         self.image_counter += 1
-        
         logger.debug(f"Saved image {image_id}: {img_filename}")
+        
         return image_id
     
     def _extract_text_from_bbox(
@@ -558,7 +568,7 @@ class PDFProcessor:
         return any(p.match(line) for p in patterns)
     
     def _save_results(self, chapters: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Save processing results to JSON file"""
+        """Save processing results to S3"""
         result = {
             "book_name": self.book_name,
             "pdf_path": str(self.pdf_path),
@@ -580,13 +590,28 @@ class PDFProcessor:
                 "image_ids": image_ids
             })
         
-        # Save JSON
-        output_json = self.output_dir / f"{self.book_name}.json"
-        with open(output_json, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+        # Upload JSON to S3
+        json_s3_key = f"{self.s3_prefix}/{self.book_name}.json"
+        self.s3_client.write_json(json_s3_key, result)
+        logger.info(f"Uploaded JSON to s3://{self.s3_client.bucket_name}/{json_s3_key}")
         
-        logger.info(f"Results saved to: {output_json}")
+        # Upload all images to S3
+        logger.info(f"Uploading {self.image_counter} images to S3...")
+        for img_file in tqdm(list(self.images_dir.glob("*.png")), desc="Uploading images"):
+            s3_key = f"{self.s3_prefix}/images/{img_file.name}"
+            self.s3_client.upload_file(str(img_file), s3_key)
+        
+        logger.info(f"All files uploaded to S3: s3://{self.s3_client.bucket_name}/{self.s3_prefix}/")
         return result
+    
+    def _cleanup_temp_files(self):
+        """Clean up temporary processing files"""
+        try:
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+                logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up temp files: {str(e)}")
     
     @staticmethod
     def _extract_image_ids(text: str) -> List[int]:

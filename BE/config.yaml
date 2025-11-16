@@ -1,11 +1,21 @@
 # Backend Configuration
 
+# S3 Storage (AWS S3 or compatible services like MinIO)
+s3:
+  endpoint_url: "https://s3.amazonaws.com"  # S3 endpoint URL (use custom for MinIO/other)
+  access_key_id: "your-access-key"  # AWS Access Key ID
+  secret_access_key: "your-secret-key"  # AWS Secret Access Key
+  bucket_name: "pdf-documents"  # S3 bucket name
+  region: "us-east-1"  # AWS region
+  use_ssl: true  # Use HTTPS
+  
 # PDF Processing
 pdf_processing:
   scale: 2.0  # PDF rendering scale (higher = better quality)
   conf_threshold: 0.25  # YOLO confidence threshold
   iou_threshold: 0.50   # YOLO IoU threshold
   model_path: "./models/yolo-doclaynet.pt"  # Path to YOLO model weights
+  temp_dir: "./temp"  # Temporary directory for processing
 
 # Embedding Service (vLLM with OpenAI-compatible API)
 embedding:
@@ -24,7 +34,6 @@ vector_store:
 
 # Document Indexing
 indexing:
-  data_dir: "./data"  # Root directory for processed documents
   chunk_size: 512  # Maximum words per chunk
   chunk_overlap: 50  # Overlapping words between chunks
   auto_index_on_upload: true  # Automatically index after PDF upload

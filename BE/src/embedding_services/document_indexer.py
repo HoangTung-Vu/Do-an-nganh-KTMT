@@ -1,9 +1,8 @@
 """
-Document Indexer - Automatically index new books from data directory
+Document Indexer - Automatically index new books from S3 storage
 """
 import json
 import hashlib
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 
@@ -11,18 +10,19 @@ from .embedding_client import EmbeddingClient
 from .vector_store import VectorStoreClient
 from ..utils.logger import setup_logger
 from ..utils.load_config import load_config
+from ..utils.s3_client import S3Client
 
 logger = setup_logger('document_indexer', 'embedding.log')
 
 
 class DocumentIndexer:
-    """Automatically scan and index documents from data directory"""
+    """Automatically scan and index documents from S3 storage"""
     
     def __init__(
         self,
-        data_dir: Optional[str] = None,
         embedding_client: Optional[EmbeddingClient] = None,
         vector_store: Optional[VectorStoreClient] = None,
+        s3_client: Optional[S3Client] = None,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None
@@ -31,9 +31,9 @@ class DocumentIndexer:
         Initialize document indexer
         
         Args:
-            data_dir: Root directory containing book subfolders
             embedding_client: EmbeddingClient instance
             vector_store: VectorStoreClient instance
+            s3_client: S3Client instance
             chunk_size: Maximum number of words per chunk
             chunk_overlap: Number of overlapping words between chunks
             config: Configuration dict (if None, loads from config.yaml)
@@ -44,66 +44,62 @@ class DocumentIndexer:
         
         indexing_config = config.get('indexing', {})
         
-        self.data_dir = Path(data_dir or indexing_config.get('data_dir', './data'))
         self.chunk_size = chunk_size or indexing_config.get('chunk_size', 512)
         self.chunk_overlap = chunk_overlap or indexing_config.get('chunk_overlap', 50)
         
         # Use provided clients or create new ones with config
         self.embedding_client = embedding_client or EmbeddingClient(config=config)
         self.vector_store = vector_store or VectorStoreClient(config=config)
+        self.s3_client = s3_client or S3Client(config=config)
         
-        logger.info(f"Document indexer initialized: {self.data_dir}")
+        logger.info(f"Document indexer initialized with S3: s3://{self.s3_client.bucket_name}/")
     
     def scan_new_books(self) -> List[str]:
         """
-        Scan data directory for new books that haven't been indexed
+        Scan S3 bucket for new books that haven't been indexed
         
         Returns:
-            List of book names (subfolder names) that need indexing
+            List of book names (folder prefixes) that need indexing
         """
-        if not self.data_dir.exists():
-            logger.warning(f"Data directory does not exist: {self.data_dir}")
-            return []
+        # Get all book folders in S3 (folders at root level)
+        book_folders = self.s3_client.list_folders(prefix='')
         
-        # Get all subfolders in data directory
-        subfolders = [
-            f.name for f in self.data_dir.iterdir() 
-            if f.is_dir() and not f.name.startswith('.') and f.name != 'uploads'
+        # Filter out system folders
+        book_folders = [
+            folder for folder in book_folders 
+            if not folder.startswith('.') and folder != 'uploads'
         ]
         
         # Get existing collections
         existing_collections = self.vector_store.list_collections()
         
         # Find books that are not indexed yet
-        new_books = [book for book in subfolders if book not in existing_collections]
+        new_books = [book for book in book_folders if book not in existing_collections]
         
-        logger.info(f"Found {len(subfolders)} books, {len(new_books)} need indexing")
+        logger.info(f"Found {len(book_folders)} books in S3, {len(new_books)} need indexing")
         return new_books
     
     def index_book(self, book_name: str) -> Dict[str, Any]:
         """
-        Index a single book
+        Index a single book from S3
         
         Args:
-            book_name: Name of the book (subfolder name)
+            book_name: Name of the book (folder name in S3)
             
         Returns:
             Indexing statistics
         """
         logger.info(f"Starting indexing for book: {book_name}")
         
-        book_dir = self.data_dir / book_name
-        json_file = book_dir / f"{book_name}.json"
+        # Load book data from S3
+        json_s3_key = f"{book_name}/{book_name}.json"
         
-        if not json_file.exists():
-            logger.error(f"Book metadata not found: {json_file}")
-            raise FileNotFoundError(f"Book metadata not found: {json_file}")
+        if not self.s3_client.object_exists(json_s3_key):
+            logger.error(f"Book metadata not found in S3: {json_s3_key}")
+            raise FileNotFoundError(f"Book metadata not found in S3: {json_s3_key}")
         
-        # Load book data
-        with open(json_file, 'r', encoding='utf-8') as f:
-            book_data = json.load(f)
-        
-        logger.info(f"Loaded book: {book_data['book_name']} with {book_data['total_chapters']} chapters")
+        book_data = self.s3_client.read_json(json_s3_key)
+        logger.info(f"Loaded book from S3: {book_data['book_name']} with {book_data['total_chapters']} chapters")
         
         # Prepare chunks for embedding
         chunks = []
