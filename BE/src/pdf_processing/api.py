@@ -7,21 +7,23 @@ from typing import Dict, Any
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from src.pdf_processing import PDFProcessor
-from ..utils.logger import setup_logger
-from ..utils.load_config import load_config
+from src.utils.logger import setup_logger
+from src.utils.load_config import load_config
+from src.utils.s3_client import S3Client
 
 router = APIRouter(prefix="/pdf", tags=["PDF Processing"])
 logger = setup_logger('pdf_api', 'pdf_api.log')
 
 # Load config once
 config = load_config()
+s3_client = S3Client(config=config)
 
 
 class ProcessPDFResponse(BaseModel):
     """Response model for PDF processing"""
     message: str
     book_name: str
-    output_dir: str
+    s3_prefix: str
     total_chapters: int
     total_images: int
 
@@ -45,11 +47,11 @@ async def upload_and_process_pdf(
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
-    # Get data directory from config
-    data_dir = config.get('indexing', {}).get('data_dir', './data')
+    # Get temp directory from config
+    temp_base = config.get('pdf_processing', {}).get('temp_dir', './temp')
     
     # Create temporary directory for uploaded file
-    upload_dir = Path(data_dir) / "uploads"
+    upload_dir = Path(temp_base) / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     
     # Save uploaded file
@@ -75,9 +77,9 @@ async def upload_and_process_pdf(
         logger.info(f"PDF processed successfully: {result['book_name']}")
         
         return ProcessPDFResponse(
-            message="PDF processed successfully",
+            message="PDF processed successfully and uploaded to S3",
             book_name=result['book_name'],
-            output_dir=str(processor.output_dir),
+            s3_prefix=processor.s3_prefix,
             total_chapters=result['total_chapters'],
             total_images=result['total_images']
         )
@@ -93,7 +95,7 @@ async def upload_and_process_pdf(
 @router.get("/status/{book_name}")
 async def get_processing_status(book_name: str):
     """
-    Get processing status and metadata for a book
+    Get processing status and metadata for a book from S3
     
     Args:
         book_name: Name of the book (PDF filename without extension)
@@ -101,23 +103,19 @@ async def get_processing_status(book_name: str):
     Returns:
         Book metadata and processing status
     """
-    data_dir = config.get('indexing', {}).get('data_dir', './data')
-    output_dir = Path(data_dir) / book_name
-    json_file = output_dir / f"{book_name}.json"
+    json_s3_key = f"{book_name}/{book_name}.json"
     
-    if not json_file.exists():
-        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
+    if not s3_client.object_exists(json_s3_key):
+        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
     
-    import json
-    with open(json_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = s3_client.read_json(json_s3_key)
     
     return {
         "status": "completed",
         "book_name": data["book_name"],
         "total_chapters": data["total_chapters"],
         "total_images": data["total_images"],
-        "output_dir": str(output_dir),
+        "s3_prefix": book_name,
         "chapters": [
             {
                 "chapter_id": ch["chapter_id"],
@@ -132,7 +130,7 @@ async def get_processing_status(book_name: str):
 @router.get("/chapter/{book_name}/{chapter_id}")
 async def get_chapter_content(book_name: str, chapter_id: int):
     """
-    Get full content of a specific chapter
+    Get full content of a specific chapter from S3
     
     Args:
         book_name: Name of the book
@@ -141,16 +139,12 @@ async def get_chapter_content(book_name: str, chapter_id: int):
     Returns:
         Chapter content with text and image references
     """
-    data_dir = config.get('indexing', {}).get('data_dir', './data')
-    output_dir = Path(data_dir) / book_name
-    json_file = output_dir / f"{book_name}.json"
+    json_s3_key = f"{book_name}/{book_name}.json"
     
-    if not json_file.exists():
-        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
+    if not s3_client.object_exists(json_s3_key):
+        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
     
-    import json
-    with open(json_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = s3_client.read_json(json_s3_key)
     
     # Find chapter
     chapter = next(
@@ -170,7 +164,7 @@ async def get_chapter_content(book_name: str, chapter_id: int):
 @router.delete("/delete/{book_name}")
 async def delete_processed_book(book_name: str):
     """
-    Delete all processed data for a book
+    Delete all processed data for a book from S3
     
     Args:
         book_name: Name of the book to delete
@@ -178,16 +172,16 @@ async def delete_processed_book(book_name: str):
     Returns:
         Success message
     """
-    data_dir = config.get('indexing', {}).get('data_dir', './data')
-    output_dir = Path(data_dir) / book_name
-    
-    if not output_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found")
+    # Check if book exists
+    json_s3_key = f"{book_name}/{book_name}.json"
+    if not s3_client.object_exists(json_s3_key):
+        raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
     
     try:
-        shutil.rmtree(output_dir)
-        logger.info(f"Deleted processed book: {book_name}")
-        return {"message": f"Book '{book_name}' deleted successfully"}
+        # Delete entire folder in S3
+        s3_client.delete_folder(f"{book_name}/")
+        logger.info(f"Deleted book from S3: {book_name}")
+        return {"message": f"Book '{book_name}' deleted successfully from S3"}
     except Exception as e:
-        logger.error(f"Error deleting book: {str(e)}")
+        logger.error(f"Error deleting book from S3: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deleting book: {str(e)}")
