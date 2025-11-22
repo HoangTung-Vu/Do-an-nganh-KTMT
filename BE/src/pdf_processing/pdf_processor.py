@@ -42,6 +42,7 @@ class PDFProcessor:
     def __init__(
         self,
         pdf_path: str,
+        user_id: str,
         output_dir: Optional[str] = None,
         model_path: Optional[str] = None,
         conf_threshold: Optional[float] = None,
@@ -54,6 +55,7 @@ class PDFProcessor:
         
         Args:
             pdf_path: Path to input PDF file
+            user_id: ID of the user who owns the file
             output_dir: Directory to save processed outputs
             model_path: Path to YOLO model weights
             conf_threshold: Confidence threshold for object detection
@@ -70,6 +72,7 @@ class PDFProcessor:
         
         self.pdf_path = Path(pdf_path)
         self.book_name = self.pdf_path.stem
+        self.user_id = user_id
         
         # Setup temporary local directory for processing
         temp_base = pdf_config.get('temp_dir', './temp')
@@ -84,7 +87,7 @@ class PDFProcessor:
         
         # Initialize S3 client
         self.s3_client = S3Client(config=config)
-        self.s3_prefix = self.book_name  # S3 folder prefix for this book
+        self.s3_prefix = f"{self.user_id}"  # S3 folder prefix is just user_id now (flattened)
         
         # Model parameters from config
         self.model_path = model_path or pdf_config.get('model_path', './models/yolo-doclaynet.pt')
@@ -358,7 +361,7 @@ class PDFProcessor:
                 if det["cls_name"] in self.IMAGE_CLASSES:
                     # Save image and add placeholder
                     image_id = self._save_image(img, det, stem)
-                    page_text.append(f"<image_{image_id}>")
+                    page_text.append(f"<{self.book_name}_image_{image_id}.png>")
                 else:
                     # Extract text from bbox
                     text = self._extract_text_from_bbox(
@@ -409,7 +412,7 @@ class PDFProcessor:
         image_id = self.image_counter
         
         # Save locally first
-        img_filename = f"{image_id}.png"
+        img_filename = f"{self.book_name}_image_{image_id}.png"
         local_img_path = self.images_dir / img_filename
         cv2.imwrite(str(local_img_path), crop)
         
@@ -581,27 +584,29 @@ class PDFProcessor:
             # Extract image IDs from content
             content_text = "\n".join(chapter["content"])
             image_ids = self._extract_image_ids(content_text)
+            images = [f"{self.book_name}_image_{img_id}.png" for img_id in image_ids]
             
             result["chapters"].append({
                 "chapter_id": idx,
                 "title": chapter["title"],
                 "content": content_text,
                 "image_count": len(image_ids),
-                "image_ids": image_ids
+                "image_ids": image_ids,
+                "images": images
             })
         
         # Upload JSON to S3
-        json_s3_key = f"{self.s3_prefix}/{self.book_name}.json"
+        json_s3_key = f"{self.user_id}/{self.book_name}.json"
         self.s3_client.write_json(json_s3_key, result)
         logger.info(f"Uploaded JSON to s3://{self.s3_client.bucket_name}/{json_s3_key}")
         
         # Upload all images to S3
         logger.info(f"Uploading {self.image_counter} images to S3...")
         for img_file in tqdm(list(self.images_dir.glob("*.png")), desc="Uploading images"):
-            s3_key = f"{self.s3_prefix}/images/{img_file.name}"
+            s3_key = f"{self.user_id}/{img_file.name}"
             self.s3_client.upload_file(str(img_file), s3_key)
         
-        logger.info(f"All files uploaded to S3: s3://{self.s3_client.bucket_name}/{self.s3_prefix}/")
+        logger.info(f"All files uploaded to S3: s3://{self.s3_client.bucket_name}/{self.user_id}/")
         return result
     
     def _cleanup_temp_files(self):
@@ -616,6 +621,6 @@ class PDFProcessor:
     @staticmethod
     def _extract_image_ids(text: str) -> List[int]:
         """Extract all image IDs from text"""
-        pattern = re.compile(r"<image_(\d+)>")
+        pattern = re.compile(r"<.*?_image_(\d+)\.png>")
         matches = pattern.findall(text)
         return [int(m) for m in matches]
