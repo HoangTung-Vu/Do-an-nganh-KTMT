@@ -50,12 +50,13 @@ def get_document_indexer() -> DocumentIndexer:
 class IndexBookRequest(BaseModel):
     """Request model for indexing a book"""
     book_name: str
+    user_id: str
     force_reindex: bool = False
 
 
 class SearchRequest(BaseModel):
     """Request model for vector search"""
-    collection_name: str
+    collection_name: str  # This is now the user_id
     query: str
     limit: int = 10
     score_threshold: Optional[float] = None
@@ -101,22 +102,23 @@ async def index_book(request: IndexBookRequest):
     
     Args:
         book_name: Name of the book to index
+        user_id: ID of the user who owns the book
         force_reindex: If True, re-index even if already exists
     """
     try:
         indexer = get_document_indexer()
         
         if request.force_reindex:
-            result = indexer.reindex_book(request.book_name)
+            result = indexer.reindex_book(request.book_name, request.user_id)
         else:
-            # Check if already indexed
-            vector_store = get_vector_store()
-            if vector_store.collection_exists(request.book_name):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Book '{request.book_name}' is already indexed. Use force_reindex=true to re-index."
-                )
-            result = indexer.index_book(request.book_name)
+            # Check if already indexed (check if book exists in user's collection)
+            # Note: This check is trickier now since collection is user_id.
+            # We would need to query if book_name exists in payload.
+            # For now, let's just trust the indexer or force reindex.
+            # Or we can check if collection exists, but that just means user exists.
+            
+            # Simplified: Just call index_book, it will upsert.
+            result = indexer.index_book(request.book_name, request.user_id)
         
         return {
             "message": f"Successfully indexed book '{request.book_name}'",
@@ -185,7 +187,7 @@ async def search_documents(request: SearchRequest):
     Search for similar documents in a collection
     
     Args:
-        collection_name: Name of the collection (book) to search in
+        collection_name: Name of the collection (user_id) to search in
         query: Search query text
         limit: Maximum number of results
         score_threshold: Minimum similarity score

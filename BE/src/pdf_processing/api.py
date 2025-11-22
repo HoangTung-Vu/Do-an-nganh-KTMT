@@ -4,7 +4,7 @@ API Endpoint for PDF Processing
 import shutil
 from pathlib import Path
 from typing import Dict, Any
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from src.pdf_processing import PDFProcessor
 from src.utils.logger import setup_logger
@@ -31,6 +31,7 @@ class ProcessPDFResponse(BaseModel):
 @router.post("/upload", response_model=ProcessPDFResponse)
 async def upload_and_process_pdf(
     file: UploadFile = File(...),
+    user_id: str = Form(...),
     background_tasks: BackgroundTasks = None
 ):
     """
@@ -38,6 +39,7 @@ async def upload_and_process_pdf(
     
     Args:
         file: PDF file to upload
+        user_id: ID of the user uploading the file
         background_tasks: FastAPI background tasks
     
     Returns:
@@ -65,6 +67,7 @@ async def upload_and_process_pdf(
         # Process PDF with config
         processor = PDFProcessor(
             pdf_path=str(pdf_path),
+            user_id=user_id,
             config=config
         )
         
@@ -93,17 +96,18 @@ async def upload_and_process_pdf(
 
 
 @router.get("/status/{book_name}")
-async def get_processing_status(book_name: str):
+async def get_processing_status(book_name: str, user_id: str):
     """
     Get processing status and metadata for a book from S3
     
     Args:
         book_name: Name of the book (PDF filename without extension)
+        user_id: ID of the user who owns the book
     
     Returns:
         Book metadata and processing status
     """
-    json_s3_key = f"{book_name}/{book_name}.json"
+    json_s3_key = f"{user_id}/{book_name}.json"
     
     if not s3_client.object_exists(json_s3_key):
         raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
@@ -115,7 +119,7 @@ async def get_processing_status(book_name: str):
         "book_name": data["book_name"],
         "total_chapters": data["total_chapters"],
         "total_images": data["total_images"],
-        "s3_prefix": book_name,
+        "s3_prefix": f"{user_id}/{book_name}",
         "chapters": [
             {
                 "chapter_id": ch["chapter_id"],
@@ -128,18 +132,19 @@ async def get_processing_status(book_name: str):
 
 
 @router.get("/chapter/{book_name}/{chapter_id}")
-async def get_chapter_content(book_name: str, chapter_id: int):
+async def get_chapter_content(book_name: str, chapter_id: int, user_id: str):
     """
     Get full content of a specific chapter from S3
     
     Args:
         book_name: Name of the book
         chapter_id: Chapter ID (0-indexed)
+        user_id: ID of the user who owns the book
     
     Returns:
         Chapter content with text and image references
     """
-    json_s3_key = f"{book_name}/{book_name}.json"
+    json_s3_key = f"{user_id}/{book_name}.json"
     
     if not s3_client.object_exists(json_s3_key):
         raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
@@ -162,25 +167,42 @@ async def get_chapter_content(book_name: str, chapter_id: int):
 
 
 @router.delete("/delete/{book_name}")
-async def delete_processed_book(book_name: str):
+async def delete_processed_book(book_name: str, user_id: str):
     """
     Delete all processed data for a book from S3
     
     Args:
         book_name: Name of the book to delete
+        user_id: ID of the user who owns the book
     
     Returns:
         Success message
     """
-    # Check if book exists
-    json_s3_key = f"{book_name}/{book_name}.json"
+    # Check if book exists in S3
+    json_s3_key = f"{user_id}/{book_name}.json"
     if not s3_client.object_exists(json_s3_key):
         raise HTTPException(status_code=404, detail=f"Book '{book_name}' not found in S3")
     
     try:
-        # Delete entire folder in S3
-        s3_client.delete_folder(f"{book_name}/")
-        logger.info(f"Deleted book from S3: {book_name}")
+        # Delete JSON file
+        s3_client.delete_object(json_s3_key)
+        
+        # Delete images (they are prefixed with book_name in user_id folder)
+        # We need to list and delete files starting with user_id/book_name_image_
+        
+        # List objects in user_id folder
+        objects_to_delete = []
+        for obj_key in s3_client.list_objects(prefix=f"{user_id}/"):
+            # Extract the filename part after the user_id/ prefix
+            relative_filename = obj_key[len(f"{user_id}/"):]
+            if relative_filename.startswith(f"{book_name}_image_"):
+                objects_to_delete.append(obj_key)
+        
+        if objects_to_delete:
+            for obj_key in objects_to_delete:
+                s3_client.delete_object(obj_key)
+            
+        logger.info(f"Deleted book '{book_name}' and associated images from S3 for user '{user_id}'")
         return {"message": f"Book '{book_name}' deleted successfully from S3"}
     except Exception as e:
         logger.error(f"Error deleting book from S3: {str(e)}")

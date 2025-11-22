@@ -2,6 +2,7 @@
 Document Indexer - Automatically index new books from S3 storage
 """
 import json
+import re
 import hashlib
 from typing import List, Dict, Any, Optional
 from tqdm import tqdm
@@ -79,12 +80,13 @@ class DocumentIndexer:
         logger.info(f"Found {len(book_folders)} books in S3, {len(new_books)} need indexing")
         return new_books
     
-    def index_book(self, book_name: str) -> Dict[str, Any]:
+    def index_book(self, book_name: str, user_id: str) -> Dict[str, Any]:
         """
         Index a single book from S3
         
         Args:
             book_name: Name of the book (folder name in S3)
+            user_id: ID of the user who owns the book
             
         Returns:
             Indexing statistics
@@ -92,7 +94,7 @@ class DocumentIndexer:
         logger.info(f"Starting indexing for book: {book_name}")
         
         # Load book data from S3
-        json_s3_key = f"{book_name}/{book_name}.json"
+        json_s3_key = f"{user_id}/{book_name}.json"
         
         if not self.s3_client.object_exists(json_s3_key):
             logger.error(f"Book metadata not found in S3: {json_s3_key}")
@@ -132,7 +134,8 @@ class DocumentIndexer:
         
         # Get embedding dimension and create collection
         vector_dim = len(embeddings[0]) if embeddings else 768
-        self.vector_store.create_collection(book_name, vector_dim)
+        # Use user_id as collection name
+        self.vector_store.create_collection(user_id, vector_dim)
         
         # Prepare points for Qdrant
         points = []
@@ -148,17 +151,18 @@ class DocumentIndexer:
                     'chapter_title': chunk['chapter_title'],
                     'chunk_index': idx,
                     'text': chunk['text'],
+                    'images': chunk.get('images', []),
                     'start_pos': chunk.get('start_pos', 0),
                     'end_pos': chunk.get('end_pos', 0)
                 }
             })
         
         # Upsert to Qdrant
-        logger.info(f"Upserting {len(points)} points to collection '{book_name}'")
-        self.vector_store.upsert_points(book_name, points)
+        logger.info(f"Upserting {len(points)} points to collection '{user_id}'")
+        self.vector_store.upsert_points(user_id, points)
         
         # Get collection info
-        collection_info = self.vector_store.get_collection_info(book_name)
+        collection_info = self.vector_store.get_collection_info(user_id)
         
         logger.info(f"Successfully indexed book '{book_name}': {collection_info}")
         
@@ -197,12 +201,13 @@ class DocumentIndexer:
         logger.info(f"Indexed {len([r for r in results if 'error' not in r])}/{len(new_books)} books")
         return results
     
-    def reindex_book(self, book_name: str) -> Dict[str, Any]:
+    def reindex_book(self, book_name: str, user_id: str) -> Dict[str, Any]:
         """
         Re-index an existing book (delete and re-create collection)
         
         Args:
             book_name: Name of the book to re-index
+            user_id: ID of the user who owns the book
             
         Returns:
             Indexing statistics
@@ -210,12 +215,18 @@ class DocumentIndexer:
         logger.info(f"Re-indexing book: {book_name}")
         
         # Delete existing collection if it exists
-        if self.vector_store.collection_exists(book_name):
-            logger.info(f"Deleting existing collection: {book_name}")
-            self.vector_store.delete_collection(book_name)
+        # Note: With user_id as collection, we might not want to delete the whole collection
+        # just for reindexing one book. But for now, let's assume we just upsert (overwrite).
+        # If we really need to clear old points for this book, we should delete by filter.
+        
+        # Delete points for this book
+        self.vector_store.delete_by_filter(
+            collection_name=user_id,
+            filter_conditions={"book_name": book_name}
+        )
         
         # Index the book
-        return self.index_book(book_name)
+        return self.index_book(book_name, user_id)
     
     def _create_chunks(
         self,
@@ -242,8 +253,13 @@ class DocumentIndexer:
         
         if len(words) <= self.chunk_size:
             # Single chunk if text is small
+            # Extract images
+            image_ids = re.findall(r"<.*?_image_(\d+)\.png>", text)
+            images = [f"{book_name}_image_{img_id}.png" for img_id in image_ids]
+            
             chunks.append({
                 'text': text,
+                'images': images,
                 'chapter_id': chapter_id,
                 'chapter_title': chapter_title,
                 'book_name': book_name,
@@ -260,8 +276,13 @@ class DocumentIndexer:
                 chunk_words = words[start:end]
                 chunk_text = ' '.join(chunk_words)
                 
+                # Extract images in this chunk
+                image_ids = re.findall(r"<.*?_image_(\d+)\.png>", chunk_text)
+                images = [f"{book_name}_image_{img_id}.png" for img_id in image_ids]
+                
                 chunks.append({
                     'text': chunk_text,
+                    'images': images,
                     'chapter_id': chapter_id,
                     'chapter_title': chapter_title,
                     'book_name': book_name,
