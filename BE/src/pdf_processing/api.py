@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Dict, Any
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from src.pdf_processing import PDFProcessor
-from src.utils.logger import setup_logger
-from src.utils.load_config import load_config
-from src.utils.s3_client import S3Client
+from . import PDFProcessor
+from ..utils.logger import setup_logger
+from ..utils.load_config import load_config
+from ..utils.s3_client import S3Client
 
 router = APIRouter(prefix="/pdf", tags=["PDF Processing"])
 logger = setup_logger('pdf_api', 'pdf_api.log')

@@ -6,8 +6,8 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from src.embedding_services import EmbeddingClient, VectorStoreClient, DocumentIndexer
-from src.utils.logger import setup_logger
+from . import EmbeddingClient, VectorStoreClient, DocumentIndexer
+from ..utils.logger import setup_logger
 
 router = APIRouter(prefix="/embedding", tags=["Embedding & Indexing"])
 logger = setup_logger('embedding_api', 'embedding.log')
