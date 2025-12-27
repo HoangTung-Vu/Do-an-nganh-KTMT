@@ -1,51 +1,46 @@
 # Backend Configuration
+database:
+  url : "postgresql.c8fu6cocaons.us-east-1.rds.amazonaws.com"
 
-# S3 Storage (AWS S3 or compatible services like MinIO)
 s3:
-  endpoint_url: "https://s3.amazonaws.com"  # S3 endpoint URL (use custom for MinIO/other)
-  access_key_id: "your-access-key"  # AWS Access Key ID
-  secret_access_key: "your-secret-key"  # AWS Secret Access Key
-  bucket_name: "pdf-documents"  # S3 bucket name
-  region: "us-east-1"  # AWS region
-  use_ssl: true  # Use HTTPS
+  endpoint_url: "https://s3.amazonaws.com"  
+  access_key_id: ""  
+  secret_access_key: ""  
+  bucket_name: "cn2ml"  
+  region: "us-east-1"  
+  use_ssl: true  
   
-# PDF Processing
 pdf_processing:
-  scale: 2.0  # PDF rendering scale (higher = better quality)
-  conf_threshold: 0.25  # YOLO confidence threshold
-  iou_threshold: 0.50   # YOLO IoU threshold
-  model_path: "./models/yolo-doclaynet.pt"  # Path to YOLO model weights
-  temp_dir: "./temp"  # Temporary directory for processing
+  scale: 2.0 
+  conf_threshold: 0.25 
+  iou_threshold: 0.50   
+  model_path: "./models/yolo-doclaynet.pt" 
+  temp_dir: "./temp" 
 
-# Embedding Service (vLLM with OpenAI-compatible API)
 embedding:
-  base_url: "http://localhost:8000/v1"  # vLLM server URL
-  api_key: "EMPTY"  # API key (can be dummy for local vLLM)
-  model: "BAAI/bge-m3"  # Embedding model name
+  base_url: "http://localhost:8000/v1" 
+  api_key: "EMPTY" 
+  model: "BAAI/bge-m3" 
   max_retries: 3
   timeout: 60
-  batch_size: 32  # Batch size for embedding generation
+  batch_size: 32 
 
-# Vector Database (Qdrant)
 vector_store:
-  url: "http://localhost:6333"  # Qdrant server URL
-  api_key: null  # Optional API key for authentication
-  distance_metric: "cosine"  # Distance metric: cosine, euclid, or dot
+  url: "http://3.87.83.234:6333" 
+  api_key: null 
+  distance_metric: "cosine" 
 
-# Document Indexing
 indexing:
-  chunk_size: 512  # Maximum words per chunk
-  chunk_overlap: 50  # Overlapping words between chunks
-  auto_index_on_upload: true  # Automatically index after PDF upload
+  chunk_size: 512 
+  chunk_overlap: 50 
+  auto_index_on_upload: true 
 
-# API Server
 server:
   host: "0.0.0.0"
   port: 8000
-  reload: true  # Hot reload for development
+  reload: true  
 
-# Logging
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  max_bytes: 10485760  # 10MB
+  level: "INFO"  
+  max_bytes: 10485760  
   backup_count: 5
