@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Loader2, UploadCloud } from 'lucide-react';
+import { Plus, Loader2, UploadCloud, X } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Button } from '../components/Button';
 import { BookCard } from '../components/BookCard';
@@ -53,22 +53,11 @@ export default function Home() {
             await pdfService.uploadPdf(selectedFile, userId);
 
             // 2. Trigger Indexing
-            // The backend says scan-and-index scans the directory.
-            // If upload puts it in the right place, this should work.
-            // Wait, pdfService.uploadPdf puts it in temp/uploads then processes it to S3?
-            // embeddingService.scanAndIndex scans "data directory".
-            // We need to make sure the flow connects.
-            // Looking at BE code:
-            // pdf_processing/api.py -> uploads to S3.
-            // embedding_services/api.py -> DocumentIndexer scans "data directory".
-            // There might be a disconnect here. The user said "generate frontend", assuming backend works.
-            // But if backend PDF processing puts files in S3, and Indexer scans local disk, they won't meet.
-            // However, let's assume the backend is set up such that "data directory" is where PDFs end up or S3 is mounted.
-            // OR, we just call index-book after upload.
+            // Auto-indexing is now handled by the backend upon upload.
+            // We just need to wait for the upload to finish.
 
-            // Let's try calling index-book explicitly if we know the name.
-            const bookName = selectedFile.name.replace('.pdf', '');
-            await embeddingService.indexBook(bookName, userId);
+            // const bookName = selectedFile.name.replace('.pdf', '');
+            // await embeddingService.indexBook(bookName, userId);
 
             setIsUploadModalOpen(false);
             setSelectedFile(null);

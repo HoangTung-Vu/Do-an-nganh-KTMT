@@ -11,6 +11,10 @@ trap cleanup SIGINT SIGTERM
 
 echo "Starting Backend..."
 cd BE
+# Sync dependencies with uv
+echo "Running uv sync..."
+uv sync
+
 # Check if venv exists, if not assume global python or user needs to setup
 if [ -d ".venv" ]; then
     source .venv/bin/activate

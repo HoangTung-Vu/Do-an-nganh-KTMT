@@ -62,5 +62,7 @@ htmlcov/
 Thumbs.db
 **/.DS_Store
 **/Thumbs.db
+/BE/config.yaml
+**.pt
 
-/home/hoangtungvum/Data/PROJECT_CE1/BE/config.yaml
+temp/
