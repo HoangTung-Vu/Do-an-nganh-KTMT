@@ -8,6 +8,7 @@ import { agentService } from '../api/agent';
 import { embeddingService } from '../api/embedding';
 import { useAuth } from '../hooks/useAuth';
 import { clsx } from 'clsx';
+import { MessageContent } from '../components/MessageContent';
 
 export default function Chat() {
     const { userId } = useAuth();
@@ -139,9 +140,7 @@ export default function Chat() {
                                         ? 'bg-slate-800 text-slate-200 rounded-tr-none'
                                         : 'bg-slate-900/80 border border-slate-800 text-slate-300 rounded-tl-none'
                                 )}>
-                                    <div className="prose prose-invert prose-sm max-w-none whitespace-pre-wrap">
-                                        {msg.content}
-                                    </div>
+                                    <MessageContent content={msg.content} />
 
                                     {/* Artifacts Display */}
                                     {msg.artifacts && msg.artifacts.length > 0 && (

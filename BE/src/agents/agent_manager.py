@@ -186,7 +186,7 @@ class ChatAgentManager:
 
             except Exception as e:
                 logger.error(f"Error retrieving artifacts: {e}", exc_info=True)
-
+        await self.cleanup_session(user_id, session_id)
         return artifacts
 
     async def cleanup(self):

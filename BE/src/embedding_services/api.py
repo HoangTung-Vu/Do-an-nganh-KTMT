@@ -1,6 +1,7 @@
 """
 API Endpoints for Embedding and Indexing
 """
+
 import os
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -10,7 +11,7 @@ from . import EmbeddingClient, VectorStoreClient, DocumentIndexer
 from ..utils.logger import setup_logger
 
 router = APIRouter(prefix="/embedding", tags=["Embedding & Indexing"])
-logger = setup_logger('embedding_api', 'embedding.log')
+logger = setup_logger("embedding_api", "embedding.log")
 
 
 # Global instances (singleton pattern)
@@ -40,8 +41,7 @@ def get_document_indexer() -> DocumentIndexer:
     global _document_indexer
     if _document_indexer is None:
         _document_indexer = DocumentIndexer(
-            embedding_client=get_embedding_client(),
-            vector_store=get_vector_store()
+            embedding_client=get_embedding_client(), vector_store=get_vector_store()
         )
     return _document_indexer
 
@@ -49,6 +49,7 @@ def get_document_indexer() -> DocumentIndexer:
 # Request/Response Models
 class IndexBookRequest(BaseModel):
     """Request model for indexing a book"""
+
     book_name: str
     user_id: str
     force_reindex: bool = False
@@ -56,6 +57,7 @@ class IndexBookRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     """Request model for vector search"""
+
     collection_name: str  # This is now the user_id
     query: str
     limit: int = 10
@@ -64,6 +66,7 @@ class SearchRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     """Response model for search results"""
+
     results: List[Dict[str, Any]]
     total: int
 
@@ -77,19 +80,19 @@ async def scan_and_index_books(background_tasks: BackgroundTasks):
     """
     try:
         indexer = get_document_indexer()
-        
+
         # Run indexing in background
         background_tasks.add_task(indexer.index_all_new_books)
-        
+
         # Get list of books that will be indexed
         new_books = indexer.scan_new_books()
-        
+
         return {
             "message": f"Indexing started for {len(new_books)} books",
             "books": new_books,
-            "status": "in_progress"
+            "status": "in_progress",
         }
-        
+
     except Exception as e:
         logger.error(f"Error in scan_and_index: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -99,7 +102,7 @@ async def scan_and_index_books(background_tasks: BackgroundTasks):
 async def index_book(request: IndexBookRequest):
     """
     Index a specific book
-    
+
     Args:
         book_name: Name of the book to index
         user_id: ID of the user who owns the book
@@ -107,7 +110,7 @@ async def index_book(request: IndexBookRequest):
     """
     try:
         indexer = get_document_indexer()
-        
+
         if request.force_reindex:
             result = indexer.reindex_book(request.book_name, request.user_id)
         else:
@@ -116,15 +119,15 @@ async def index_book(request: IndexBookRequest):
             # We would need to query if book_name exists in payload.
             # For now, let's just trust the indexer or force reindex.
             # Or we can check if collection exists, but that just means user exists.
-            
+
             # Simplified: Just call index_book, it will upsert.
             result = indexer.index_book(request.book_name, request.user_id)
-        
+
         return {
             "message": f"Successfully indexed book '{request.book_name}'",
-            "result": result
+            "result": result,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -140,7 +143,7 @@ async def list_collections():
     try:
         vector_store = get_vector_store()
         collections = vector_store.list_collections()
-        
+
         # Get info for each collection
         collection_info = []
         for coll_name in collections:
@@ -148,13 +151,12 @@ async def list_collections():
                 info = vector_store.get_collection_info(coll_name)
                 collection_info.append(info)
             except Exception as e:
-                logger.warning(f"Could not get info for collection '{coll_name}': {str(e)}")
-        
-        return {
-            "total": len(collections),
-            "collections": collection_info
-        }
-        
+                logger.warning(
+                    f"Could not get info for collection '{coll_name}': {str(e)}"
+                )
+
+        return {"total": len(collections), "collections": collection_info}
+
     except Exception as e:
         logger.error(f"Error listing collections: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -167,13 +169,15 @@ async def get_collection_info(collection_name: str):
     """
     try:
         vector_store = get_vector_store()
-        
+
         if not vector_store.collection_exists(collection_name):
-            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Collection '{collection_name}' not found"
+            )
+
         info = vector_store.get_collection_info(collection_name)
         return info
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -185,7 +189,7 @@ async def get_collection_info(collection_name: str):
 async def search_documents(request: SearchRequest):
     """
     Search for similar documents in a collection
-    
+
     Args:
         collection_name: Name of the collection (user_id) to search in
         query: Search query text
@@ -195,30 +199,27 @@ async def search_documents(request: SearchRequest):
     try:
         vector_store = get_vector_store()
         embedding_client = get_embedding_client()
-        
+
         # Check if collection exists
         if not vector_store.collection_exists(request.collection_name):
             raise HTTPException(
                 status_code=404,
-                detail=f"Collection '{request.collection_name}' not found"
+                detail=f"Collection '{request.collection_name}' not found",
             )
-        
+
         # Generate query embedding
         query_vector = embedding_client.embed_text(request.query)
-        
+
         # Search
         results = vector_store.search(
             collection_name=request.collection_name,
             query_vector=query_vector,
             limit=request.limit,
-            score_threshold=request.score_threshold
+            score_threshold=request.score_threshold,
         )
-        
-        return SearchResponse(
-            results=results,
-            total=len(results)
-        )
-        
+
+        return SearchResponse(results=results, total=len(results))
+
     except HTTPException:
         raise
     except Exception as e:
@@ -233,16 +234,16 @@ async def delete_collection(collection_name: str):
     """
     try:
         vector_store = get_vector_store()
-        
+
         if not vector_store.collection_exists(collection_name):
-            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Collection '{collection_name}' not found"
+            )
+
         vector_store.delete_collection(collection_name)
-        
-        return {
-            "message": f"Collection '{collection_name}' deleted successfully"
-        }
-        
+
+        return {"message": f"Collection '{collection_name}' deleted successfully"}
+
     except HTTPException:
         raise
     except Exception as e:
@@ -258,29 +259,31 @@ async def health_check():
     try:
         embedding_client = get_embedding_client()
         vector_store = get_vector_store()
-        
+
         # Test embedding service
         try:
             _ = embedding_client.embed_text("test")
             embedding_status = "healthy"
         except Exception as e:
             embedding_status = f"unhealthy: {str(e)}"
-        
+
         # Test vector store
         try:
             _ = vector_store.list_collections()
             vector_store_status = "healthy"
         except Exception as e:
             vector_store_status = f"unhealthy: {str(e)}"
-        
-        overall_healthy = embedding_status == "healthy" and vector_store_status == "healthy"
-        
+
+        overall_healthy = (
+            embedding_status == "healthy" and vector_store_status == "healthy"
+        )
+
         return {
             "status": "healthy" if overall_healthy else "degraded",
             "embedding_service": embedding_status,
-            "vector_store": vector_store_status
+            "vector_store": vector_store_status,
         }
-        
+
     except Exception as e:
         logger.error(f"Error in health check: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
