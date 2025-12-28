@@ -4,6 +4,7 @@ from abc import abstractmethod
 from google.genai import types
 import re
 import base64
+import binascii
 
 from google.adk.tools.base_tool import BaseTool
 from google.adk.models.llm_request import LlmRequest
@@ -58,17 +59,24 @@ class BaseArtifactTool(BaseTool):
         logger.info(f"EXECUTING {self.name} with args: {args}")
 
         # Execute search (implemented by subclass)
-        # _execute_search now returns a dict that can contain both base64 images and plain text
+
         raw_artifacts = await self._execute_search(args, tool_context)
 
         # Process and save artifacts
+        text_content = raw_artifacts.pop("text", None)
+
         saved_artifact_names = await self._save_artifacts(raw_artifacts, tool_context)
 
-        return {
+        response = {
             "status": "success",
             "message": "Artifacts added to tool context.",
-            "artifact_name": saved_artifact_names,  # Renamed for clarity
+            "artifact_name": saved_artifact_names,
         }
+
+        if text_content:
+            response["text"] = text_content
+
+        return response
 
     async def _save_artifacts(
         self, artifacts_data: Dict[str, str], tool_context: ToolContext
@@ -84,24 +92,65 @@ class BaseArtifactTool(BaseTool):
                 continue
 
             artifact_part = None
-            # Heuristic to determine if it's a base64 image or plain text
+            is_image = False
+            image_data = None
+            mime_type = "image/png"  # Default
+
+            # Check for data
             if re.match(r"^data:image/\w+;base64,", data_string):
                 try:
                     base64_str = re.sub(r"^data:image/\w+;base64,", "", data_string)
-                    images_bytes = base64.b64decode(base64_str)
-                    # Attempt to guess MIME type, default to png if not specified in data URI
+                    image_data = base64.b64decode(base64_str)
                     mime_match = re.match(r"^data:(image/\w+);base64,", data_string)
-                    mime_type = mime_match.group(1) if mime_match else "image/png"
+                    if mime_match:
+                        mime_type = mime_match.group(1)
+                    is_image = True
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to decode data URI for {artifact_name}: {e}"
+                    )
+
+            # Check for raw base64 (if not already identified)
+            if not is_image:
+                if len(data_string) > 100 and " " not in data_string[:100]:
+                    try:
+                        decoded = base64.b64decode(data_string, validate=True)
+                        if decoded.startswith(b"\x89PNG\r\n\x1a\n"):
+                            mime_type = "image/png"
+                            is_image = True
+                            image_data = decoded
+                        elif decoded.startswith(b"\xff\xd8"):
+                            mime_type = "image/jpeg"
+                            is_image = True
+                            image_data = decoded
+                        elif decoded.startswith(b"GIF87a") or decoded.startswith(
+                            b"GIF89a"
+                        ):
+                            mime_type = "image/gif"
+                            is_image = True
+                            image_data = decoded
+                        elif decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP":
+                            mime_type = "image/webp"
+                            is_image = True
+                            image_data = decoded
+                    except Exception:
+                        pass
+
+            if is_image and image_data:
+                try:
                     artifact_part = types.Part.from_bytes(
-                        data=images_bytes, mime_type=mime_type
+                        data=image_data, mime_type=mime_type
+                    )
+                    logger.info(
+                        f"Created image part for {artifact_name} with mime_type {mime_type}"
                     )
                 except Exception as e:
                     logger.warning(
-                        f"Could not decode base64 for artifact {artifact_name}: {e}. Treating as text."
+                        f"Could not create image part for {artifact_name}: {e}. Treating as text."
                     )
                     artifact_part = types.Part.from_text(text=data_string)
             else:
-                # Assume it's plain text if not a base64 image URI
+                # Assume it's plain text
                 artifact_part = types.Part.from_text(text=data_string)
 
             if artifact_part:
@@ -117,12 +166,10 @@ class BaseArtifactTool(BaseTool):
         self, *, tool_context: ToolContext, llm_request: LlmRequest
     ) -> None:
         """Load and attach artifacts to LLM request after tool execution."""
-        # Call parent implementation
         await super().process_llm_request(
             tool_context=tool_context, llm_request=llm_request
         )
 
-        # Check if this tool was just called
         if not (llm_request.contents and llm_request.contents[-1].parts):
             return
 
@@ -130,7 +177,6 @@ class BaseArtifactTool(BaseTool):
         if not function_response or function_response.name != self.name:
             return
 
-        # Load and attach artifacts
         artifact_names = function_response.response.get("artifact_name", [])
         for artifact_name in artifact_names:
             artifact = await tool_context.load_artifact(artifact_name)
@@ -138,16 +184,80 @@ class BaseArtifactTool(BaseTool):
                 logger.warning(f'Artifact "{artifact_name}" not found')
                 continue
 
-            # Attach artifact based on its type
+            logger.info(f"Loaded artifact {artifact_name}: type={type(artifact)}")
+            if hasattr(artifact, "text") and artifact.text:
+                logger.info(
+                    f"Artifact {artifact_name} has text content (length {len(artifact.text)})"
+                )
+            if hasattr(artifact, "inline_data"):
+                logger.info(
+                    f"Artifact {artifact_name} has inline_data (mime_type={getattr(artifact.inline_data, 'mime_type', 'unknown')})"
+                )
+
             parts_to_add = []
             parts_to_add.append(
                 types.Part.from_text(text=f'Artifact "{artifact_name}" is:')
             )
 
-            # If the artifact is text, append the text content directly
-            # Otherwise, append the artifact object itself (for images, etc.)
             if artifact.text:
-                parts_to_add.append(types.Part.from_text(text=artifact.text))
+                text_content = artifact.text.strip()
+                is_image_text = False
+                image_part_from_text = None
+
+                # Check data URI in text
+                if (
+                    text_content.startswith("data:image/")
+                    and ";base64," in text_content[:50]
+                ):
+                    try:
+                        base64_str = text_content.split(";base64,")[1]
+                        image_bytes = base64.b64decode(base64_str)
+                        mime_type = text_content.split(";base64,")[0].replace(
+                            "data:", ""
+                        )
+                        image_part_from_text = types.Part.from_bytes(
+                            data=image_bytes, mime_type=mime_type
+                        )
+                        is_image_text = True
+                        logger.info(
+                            f"Converted text artifact {artifact_name} to image part (Data URI)"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to convert text artifact {artifact_name} to image: {e}"
+                        )
+
+                # Check raw base64 in text (heuristic)
+                elif len(text_content) > 100 and " " not in text_content[:100]:
+                    try:
+                        decoded = base64.b64decode(text_content, validate=True)
+                        detected_mime = None
+                        if decoded.startswith(b"\x89PNG\r\n\x1a\n"):
+                            detected_mime = "image/png"
+                        elif decoded.startswith(b"\xff\xd8"):
+                            detected_mime = "image/jpeg"
+                        elif decoded.startswith(b"GIF87a") or decoded.startswith(
+                            b"GIF89a"
+                        ):
+                            detected_mime = "image/gif"
+                        elif decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP":
+                            detected_mime = "image/webp"
+
+                        if detected_mime:
+                            image_part_from_text = types.Part.from_bytes(
+                                data=decoded, mime_type=detected_mime
+                            )
+                            is_image_text = True
+                            logger.info(
+                                f"Converted text artifact {artifact_name} to image part (Raw Base64, mime={detected_mime})"
+                            )
+                    except Exception:
+                        pass
+
+                if is_image_text and image_part_from_text:
+                    parts_to_add.append(image_part_from_text)
+                else:
+                    parts_to_add.append(types.Part.from_text(text=artifact.text))
             else:
                 parts_to_add.append(artifact)
 

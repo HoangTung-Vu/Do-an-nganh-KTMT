@@ -58,18 +58,17 @@ class SearchTool(BaseArtifactTool):
 
         logger.info(f"Executing search for user {user_id} with query: {query}")
 
-        # Call the search function
-        # search_func is synchronous, but _execute_search is async.
-        # Since search_func does I/O (network), it might block the event loop.
-        # However, for this implementation, we'll call it directly.
-        # If needed, we could wrap it in run_in_executor.
-
         results = search_func(
             query=query, user_id=user_id, limit=limit, score_threshold=score_threshold
         )
 
-        # Log the search results (excluding images)
+        log_results = results.copy()
+        log_entry = {k: v for k, v in log_results.items() if k == "text"}
+        image_keys = [k for k in log_results.keys() if k != "text"]
+        if image_keys:
+            log_entry["images_found"] = image_keys
+
         result_logger.info(f"User: {user_id} | Query: {query}")
-        result_logger.info(f"Result: {str(results)}")
+        result_logger.info(f"Result: {log_entry}")
 
         return results

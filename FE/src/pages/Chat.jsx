@@ -146,14 +146,24 @@ export default function Chat() {
                                     {msg.artifacts && msg.artifacts.length > 0 && (
                                         <div className="mt-4 space-y-2">
                                             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">References</p>
-                                            {msg.artifacts.map((artifact, aIdx) => (
-                                                <div key={aIdx} className="bg-slate-950/50 rounded p-3 text-xs border border-slate-800/50">
-                                                    {/* Render artifact content safely */}
-                                                    <pre className="overflow-x-auto text-slate-400">
-                                                        {JSON.stringify(artifact, null, 2)}
-                                                    </pre>
-                                                </div>
-                                            ))}
+                                            {msg.artifacts.map((artifact, aIdx) => {
+                                                // Create a clean copy for display
+                                                const cleanArtifact = JSON.parse(JSON.stringify(artifact));
+
+                                                // Remove large data fields
+                                                if (cleanArtifact.data) delete cleanArtifact.data;
+                                                if (cleanArtifact.image_bytes) delete cleanArtifact.image_bytes;
+                                                if (cleanArtifact.inline_data?.data) delete cleanArtifact.inline_data.data;
+
+                                                return (
+                                                    <div key={aIdx} className="bg-slate-950/50 rounded p-3 text-xs border border-slate-800/50">
+                                                        {/* Render artifact content safely */}
+                                                        <pre className="overflow-x-auto text-slate-400">
+                                                            {JSON.stringify(cleanArtifact, null, 2)}
+                                                        </pre>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     )}
                                 </div>
