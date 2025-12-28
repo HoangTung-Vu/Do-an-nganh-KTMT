@@ -43,20 +43,28 @@ class PDFProcessor:
     # Regex patterns for chapter detection
     CHAPTER_PATTERNS = {
         "page_mark": re.compile(r"^\[--- PAGE\s+(\d+)\s+---\]$", re.IGNORECASE),
+        # Bắt dòng chỉ có "CHƯƠNG I" hoặc "CHƯƠNG 1" (cho phép OCR lỗi nhẹ)
         "chapter_only": re.compile(
-            r"^\s*(?:CHƯƠNG|CHAPTER)\s+([IVXLCDM\d]+).*$", re.IGNORECASE
+            r"^\s*(?:CHƯƠNG|CHAPTER|PHẦN|PART)\s+([IVXLCDM\d]+)[:\.]?\s*$",
+            re.IGNORECASE,
         ),
+        # Bắt dòng "CHƯƠNG I. GIỚI THIỆU..."
         "chapter_inline": re.compile(
-            r"^\s*(?:CHƯƠNG|CHAPTER)\s+([IVXLCDM\d]+)\s*[\.\-–:]?\s+(.+?)\s*$",
+            r"^\s*(?:CHƯƠNG|CHAPTER|PHẦN|PART)\s+([IVXLCDM\d]+)[\.\-–:]?\s+(.+?)\s*$",
             re.IGNORECASE,
         ),
+        # Bắt dòng "PHỤ LỤC A"
         "appendix_only": re.compile(
-            r"^\s*(?:PHỤ LỤC|APPENDIX)\s+([A-Z]+)\s*$", re.IGNORECASE
+            r"^\s*(?:PHỤ LỤC|APPENDIX)\s+([A-Z\d]+)[:\.]?\s*$", re.IGNORECASE
         ),
+        # Bắt dòng "PHỤ LỤC A. Tên phụ lục"
         "appendix_inline": re.compile(
-            r"^\s*(?:PHỤ LỤC|APPENDIX)\s+([A-Z]+)\s*[\.\-–:]?\s+(.+?)\s*$",
+            r"^\s*(?:PHỤ LỤC|APPENDIX)\s+([A-Z\d]+)[\.\-–:]?\s+(.+?)\s*$",
             re.IGNORECASE,
         ),
+        # Regex để phát hiện dòng Mục lục (để bỏ qua không cắt chương tại đây)
+        # Ví dụ: "CHƯƠNG I. GIỚI THIỆU ........ 7"
+        "toc_entry": re.compile(r".*\.{3,}\s*\d+$"),
     }
 
     def __init__(
@@ -90,7 +98,6 @@ class PDFProcessor:
             config = load_config()
 
         pdf_config = config.get("pdf_processing", {})
-        indexing_config = config.get("indexing", {})
 
         self.pdf_path = Path(pdf_path)
         self.book_name = self.pdf_path.stem
@@ -115,16 +122,12 @@ class PDFProcessor:
 
         # Initialize S3 client
         self.s3_client = S3Client(config=config)
-        self.s3_prefix = (
-            f"{self.user_id}"  # S3 folder prefix is just user_id now (flattened)
-        )
+        self.s3_prefix = f"{self.user_id}"
 
         # Model parameters from config
         self.model_path = model_path or pdf_config.get(
             "model_path", "./models/yolo-doclaynet.pt"
         )
-        self.conf_threshold = conf_threshold or pdf_config.get("conf_threshold", 0.25)
-        self.iou_threshold = iou_threshold or pdf_config.get("iou_threshold", 0.50)
         self.conf_threshold = conf_threshold or pdf_config.get("conf_threshold", 0.25)
         self.iou_threshold = iou_threshold or pdf_config.get("iou_threshold", 0.50)
         self.scale = scale or pdf_config.get("scale", 2.0)
@@ -494,9 +497,12 @@ class PDFProcessor:
         return "\n".join(lines).strip()
 
     def _split_chapters(self, linear_text: List[str]) -> List[Dict[str, Any]]:
-        """Split linear text into chapters based on headings"""
+        """
+        Split linear text into chapters based on headings.
+        Scans line by line instead of relying on page markers.
+        """
         chapters = []
-        current = {"title": "Chương 0. Mở đầu", "content": []}
+        current_chapter = {"title": "Phần mở đầu", "content": []}
 
         i = 0
         n = len(linear_text)
@@ -505,102 +511,142 @@ class PDFProcessor:
             line = linear_text[i]
             stripped = (line or "").strip()
 
-            # Check if this is a page marker
+            # 1. Page Mark: Giữ lại để biết ngữ cảnh nhưng không dùng để cắt chương
             if self.CHAPTER_PATTERNS["page_mark"].match(stripped):
-                # Look ahead for chapter/appendix heading
-                new_chapter = self._detect_chapter_heading(linear_text, i)
+                current_chapter["content"].append(line)
+                i += 1
+                continue
 
-                if new_chapter:
-                    # Save current chapter
-                    if current["content"] or chapters:
-                        chapters.append(current.copy())
-                    # Start new chapter
-                    current = new_chapter
-                    i += 1
-                    continue
+            # 2. Table of Contents Entry: Bỏ qua để tránh cắt chương giả
+            if self.CHAPTER_PATTERNS["toc_entry"].match(stripped):
+                current_chapter["content"].append(line)
+                i += 1
+                continue
 
-            # Add line to current chapter
-            current["content"].append(line)
-            i += 1
+            # 3. Phân tích xem dòng này có phải là bắt đầu chương không
+            new_chapter_info = self._analyze_line_for_chapter(linear_text, i)
 
-        # Save last chapter
-        if current["content"] or not chapters:
-            chapters.append(current)
+            if new_chapter_info:
+                # Tìm thấy chương mới -> Lưu chương cũ
+                if current_chapter["content"] or chapters:
+                    chapters.append(current_chapter)
 
-        # Handle single chapter case
-        if len(chapters) == 1 and chapters[0]["title"] == "Chương 0. Mở đầu":
-            chapters[0]["title"] = "Chương 0. Toàn văn"
+                # Khởi tạo chương mới
+                current_chapter = {"title": new_chapter_info["title"], "content": []}
+
+                # Thêm tiêu đề vào nội dung
+                current_chapter["content"].append(new_chapter_info["full_title_line"])
+
+                # Nhảy qua các dòng đã xử lý (đề phòng tiêu đề 2 dòng)
+                i = new_chapter_info["next_idx"]
+            else:
+                # Dòng nội dung thường
+                current_chapter["content"].append(line)
+                i += 1
+
+        # Lưu chương cuối cùng
+        if current_chapter["content"]:
+            chapters.append(current_chapter)
+
+        # Xử lý trường hợp đặc biệt chỉ có 1 chương mở đầu
+        if len(chapters) == 1 and chapters[0]["title"] == "Phần mở đầu":
+            chapters[0]["title"] = "Toàn văn"
 
         return chapters
 
-    def _detect_chapter_heading(
-        self, lines: List[str], page_idx: int, lookahead: int = 8
-    ) -> Optional[Dict[str, Any]]:
-        """Detect chapter or appendix heading after page marker"""
-        # Find next non-empty line
-        next_idx = self._find_next_non_empty(lines, page_idx, lookahead)
-        if next_idx is None:
+    def _analyze_line_for_chapter(
+        self, lines: List[str], current_idx: int
+    ) -> Optional[Dict]:
+        """
+        Analyze current line (and potentially the next) to see if it starts a chapter.
+        Returns Dict with title and next_index if found, else None.
+        """
+        line = lines[current_idx].strip()
+        if not line:
             return None
 
-        candidate = (lines[next_idx] or "").strip()
-
-        # Try appendix patterns first
-        m = self.CHAPTER_PATTERNS["appendix_inline"].match(candidate)
-        if m:
-            app_id = m.group(1)
-            title = m.group(2).strip()
+        # Case 1: Inline Chapter (e.g., "CHƯƠNG I. GIỚI THIỆU")
+        m_inline = self.CHAPTER_PATTERNS["chapter_inline"].match(line)
+        if m_inline:
             return {
-                "title": f"Phụ lục {app_id}. {title}" if title else f"Phụ lục {app_id}",
-                "content": [],
+                "title": f"Chương {m_inline.group(1)}. {m_inline.group(2)}",
+                "full_title_line": line,
+                "next_idx": current_idx + 1,
             }
 
-        m = self.CHAPTER_PATTERNS["appendix_only"].match(candidate)
-        if m:
-            # Look for title on next line
-            title_idx = self._find_next_non_empty(lines, next_idx, 6)
-            if title_idx:
-                title_line = (lines[title_idx] or "").strip()
-                if not self._is_heading_marker(title_line):
-                    app_id = m.group(1)
-                    return {"title": f"Phụ lục {app_id}. {title_line}", "content": []}
-
-        # Try chapter patterns
-        m = self.CHAPTER_PATTERNS["chapter_inline"].match(candidate)
-        if m:
-            ch_num = m.group(1)
-            title = m.group(2).strip()
+        # Case 2: Inline Appendix (e.g., "PHỤ LỤC A. CODE")
+        m_app_inline = self.CHAPTER_PATTERNS["appendix_inline"].match(line)
+        if m_app_inline:
             return {
-                "title": f"Chương {ch_num}. {title}" if title else f"Chương {ch_num}",
-                "content": [],
+                "title": f"Phụ lục {m_app_inline.group(1)}. {m_app_inline.group(2)}",
+                "full_title_line": line,
+                "next_idx": current_idx + 1,
             }
 
-        m = self.CHAPTER_PATTERNS["chapter_only"].match(candidate)
-        if m:
-            # Look for title on next line
-            title_idx = self._find_next_non_empty(lines, next_idx, 6)
-            if title_idx:
-                title_line = (lines[title_idx] or "").strip()
-                if not self._is_heading_marker(title_line):
-                    ch_num = m.group(1)
-                    return {"title": f"Chương {ch_num}. {title_line}", "content": []}
+        # Case 3: Split Chapter (Line 1: "CHƯƠNG I", Line 2: "GIỚI THIỆU")
+        m_only = self.CHAPTER_PATTERNS["chapter_only"].match(line)
+        if m_only:
+            idx_num = m_only.group(1)
+            # Tìm dòng tiếp theo không rỗng để làm tên chương
+            next_idx = self._find_next_non_empty(lines, current_idx, max_steps=3)
+
+            if next_idx:
+                title_part = lines[next_idx].strip()
+                # Đảm bảo dòng tiếp theo không phải là Page Mark hoặc Header
+                if not self._is_heading_marker(title_part):
+                    full_title = f"Chương {idx_num}. {title_part}"
+                    combined_line = f"{line}\n{title_part}"
+                    return {
+                        "title": full_title,
+                        "full_title_line": combined_line,
+                        "next_idx": next_idx + 1,
+                    }
+
+            return {
+                "title": f"Chương {idx_num}",
+                "full_title_line": line,
+                "next_idx": current_idx + 1,
+            }
+
+        # Case 4: Split Appendix
+        m_app_only = self.CHAPTER_PATTERNS["appendix_only"].match(line)
+        if m_app_only:
+            app_id = m_app_only.group(1)
+            next_idx = self._find_next_non_empty(lines, current_idx, max_steps=3)
+
+            if next_idx:
+                title_part = lines[next_idx].strip()
+                if not self._is_heading_marker(title_part):
+                    full_title = f"Phụ lục {app_id}. {title_part}"
+                    combined_line = f"{line}\n{title_part}"
+                    return {
+                        "title": full_title,
+                        "full_title_line": combined_line,
+                        "next_idx": next_idx + 1,
+                    }
+
+            return {
+                "title": f"Phụ lục {app_id}",
+                "full_title_line": line,
+                "next_idx": current_idx + 1,
+            }
 
         return None
 
     def _find_next_non_empty(
-        self, lines: List[str], start_idx: int, max_steps: int = 8
+        self, lines: List[str], start_idx: int, max_steps: int = 5
     ) -> Optional[int]:
-        """Find index of next non-empty line"""
-        i = start_idx + 1
-        steps = 0
-        while i < len(lines) and steps < max_steps:
-            if (lines[i] or "").strip():
+        """Find index of next non-empty line within range, skipping markers"""
+        n = len(lines)
+        for i in range(start_idx + 1, min(start_idx + 1 + max_steps, n)):
+            val = lines[i].strip()
+            # Bỏ qua dòng trống và Page Mark khi đang tìm kiếm tiêu đề phụ
+            if val and not self.CHAPTER_PATTERNS["page_mark"].match(val):
                 return i
-            i += 1
-            steps += 1
         return None
 
     def _is_heading_marker(self, line: str) -> bool:
-        """Check if line is a heading marker (page, chapter, appendix)"""
+        """Check if line is a heading marker or page marker"""
         patterns = [
             self.CHAPTER_PATTERNS["page_mark"],
             self.CHAPTER_PATTERNS["chapter_only"],

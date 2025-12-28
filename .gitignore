@@ -62,7 +62,7 @@ htmlcov/
 Thumbs.db
 **/.DS_Store
 **/Thumbs.db
-/BE/config.yaml
+BE/config.yaml
 **.pt
 
-temp/
+temp/BE/config.yaml
